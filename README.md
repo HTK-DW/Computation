@@ -1,1 +1,1 @@
-Computation
+Projekt zum Testen verschiedener Möglichkeiten zum Interpretieren eingegebener Formeln

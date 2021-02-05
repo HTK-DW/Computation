@@ -1,12 +1,18 @@
-﻿using System;
+﻿using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using System;
 using System.Collections.Generic;
-using System.Threading.Tasks;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Runtime.Loader;
+using System.Text;
 
 namespace Heliatek.Computation.Compilation
 {
     class Program
     {
-        public static async Task Main(string[] args)
+        public static void Main()
         {
             var variables = new[]
             {
@@ -19,55 +25,125 @@ namespace Heliatek.Computation.Compilation
                 new Tuple<Type, string, object>(typeof(double), "Segmentlänge", "57.4" ),
             };
             var formulas = new[] {
-                new Tuple<string, string, string>("double", "(MAX(Produktlänge, 200) - 115)", "Substratlänge"),
-                new Tuple<string, string, string>("double", "ceil((Substratlänge - 8) / 100)", "Segmentanzahl"),
-                new Tuple<string, string, string>("double", "floor(Substratlänge - 8) / MIN(Segmentanzahl, 5)", "Segmentlänge"),
-                new Tuple<string, string, string>("double?", @"(Color_of_MBs == ""schwarz"") ? 70 : (Color_of_MBs == ""weiß"") ? 80 : null;", "Heizertemperatur"),
-                new Tuple<string, string, string>("double?", @"(Substrat == ""Zulieferer A"") ? 85 : (Substrat == ""Zulieferer B"") ? 60 : null", "Laser_Leistung"),
-                new Tuple<string, string, string>("double?", @"(Color_of_MBs == ""schwarz"") ? 4 : 3", "Untergrenze_Bandgeschwindigkeit"),
+                new Tuple<Type, string, string>(typeof(double), "(MAX(Produktlänge, 200) - 115)", "Substratlänge"),
+                new Tuple<Type, string, string>(typeof(double), "ceil((Substratlänge - 8) / 100)", "Segmentanzahl"),
+                new Tuple<Type, string, string>(typeof(double), "floor(Substratlänge - 8) / MIN(Segmentanzahl, 5)", "Segmentlänge"),
+                new Tuple<Type, string, string>(typeof(double?), @"(Color_of_MBs == ""schwarz"") ? 70 : (Color_of_MBs == ""weiß"") ? 80 : null", "Heizertemperatur"),
+                new Tuple<Type, string, string>(typeof(double?), @"(Substrat == ""Zulieferer A"") ? 85 : (Substrat == ""Zulieferer B"") ? 60 : null", "Laser_Leistung"),
+                new Tuple<Type, string, string>(typeof(double), @"(Color_of_MBs == ""schwarz"") ? 4 : 3", "Untergrenze_Bandgeschwindigkeit"),
                 //new Tuple<Type, string, string>(@"var product_length = 7; return (product_length - 115);"
             };
 
-            await CalculateSingleValueAsync(formulas[0], variables);
-            await CalculateSingleValueAsync(formulas[1], variables);
-            await CalculateAllValuesAsync(formulas, new[] { variables[0], variables[1], variables[2] });
+            CalculateSingleValue(formulas[0], variables.Take(3));
+            CalculateSingleValue(formulas[1], variables.Take(4));
+            CalculateAllValues(formulas, variables.Take(3));
 
             Console.ReadLine();
         }
 
-        private static async Task CalculateAllValuesAsync(IEnumerable<Tuple<string, string, string>> formulas, IEnumerable<Tuple<Type, string, object>> variables)
+        private static void CalculateAllValues(IEnumerable<Tuple<Type, string, string>> formulas, IEnumerable<Tuple<Type, string, object>> variables)
         {
+            var stringBuilder = new StringBuilder();
+            stringBuilder.AppendLine("using System;");
+            stringBuilder.AppendLine("public class POR {");
 
+            foreach (var variable in variables)
+            {
+                var variableName = variable.Item1.Name;
+                if (variable.Item1.IsGenericType)
+                {
+                    variableName = variable.Item1.ToString();
+                }
+                stringBuilder.AppendLine($"    private static {variableName} {variable.Item2} = {variable.Item3};");
+            }
+
+            foreach (var formula in formulas)
+            {
+                var variableName = formula.Item1.Name;
+                if (formula.Item1.IsGenericType)
+                {
+                    variableName = $"{formula.Item1.Name.Replace("`1", "")}<{string.Join(',', formula.Item1.GetGenericArguments().Select(t => t.Name))}>";
+                }
+                stringBuilder.AppendLine($"    public static {variableName} {formula.Item3} = {ReplaceFunctions(formula.Item2)};");
+            }
+
+            stringBuilder.AppendLine("}");
+
+            try
+            {
+                var result = Execute(stringBuilder.ToString(), "Segmentlänge");
+                Console.WriteLine($"=> {result}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("=> " + ex.Message);
+            }
+            Console.WriteLine();
         }
 
-        private static async Task CalculateSingleValueAsync(Tuple<string, string, string> formula, IEnumerable<Tuple<Type, string, object>> variables)
+        private static void CalculateSingleValue(Tuple<Type, string, string> formula, IEnumerable<Tuple<Type, string, object>> variables)
         {
+            var stringBuilder = new StringBuilder();
+            stringBuilder.AppendLine("using System;");
+            stringBuilder.AppendLine("public class POR {");
 
+            foreach (var variable in variables)
+            {
+                stringBuilder.AppendLine($"    private static {variable.Item1.Name} {variable.Item2} = {variable.Item3};");
+            }
+
+            stringBuilder.AppendLine($"    public static {formula.Item1.Name} {formula.Item3} = {ReplaceFunctions(formula.Item2)};");
+
+            stringBuilder.AppendLine("}");
+
+            try
+            {
+                var result = Execute(stringBuilder.ToString(), formula.Item3);
+                Console.WriteLine($"=> {result}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("=> " + ex.Message);
+            }
+            Console.WriteLine();
         }
 
-        private static string Test()
+        private static object Execute(string code, string method)
         {
+            Console.WriteLine("Execute Code:");
+            Console.WriteLine(code);
+
             var compilation = CSharpCompilation.Create(
-    "DynamicAssembly", new[] { CSharpSyntaxTree.ParseText(@"
-     public class DynamicClass {
-        public int DynamicMethod(int a, int b) {
-            return a-b;
-        }
-     }") }, new[] { MetadataReference.CreateFromFile(typeof(object).GetTypeInfo().Assembly.Location) },
-    new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+                Guid.NewGuid().ToString(),
+                new[] {
+                    CSharpSyntaxTree.ParseText(code)
+                },
+                new[] {
+                    MetadataReference.CreateFromFile(typeof(object).GetTypeInfo().Assembly.Location)
+                },
+                new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
 
             using (var ms = new MemoryStream())
             {
                 var cr = compilation.Emit(ms);
                 ms.Seek(0, SeekOrigin.Begin);
+
                 var assembly = AssemblyLoadContext.Default.LoadFromStream(ms);
 
-                var createdType = assembly.ExportedTypes.FirstOrDefault(x => x.Name == "DynamicClass");
-                var methodInfo = createdType.GetMethod("DynamicMethod", BindingFlags.Instance | BindingFlags.Public);
-                var instance = Activator.CreateInstance(createdType);
-
-                var result = methodInfo.Invoke(instance, new object[] { 5, 3 });
+                var createdType = assembly.ExportedTypes.FirstOrDefault();
+                var fieldInfo = createdType.GetField(method, BindingFlags.Static | BindingFlags.Public);
+                    
+                return fieldInfo.GetValue(null);
             }
+        }
+
+        private static string ReplaceFunctions(string script)
+        {
+            return script
+                .Replace("ceil", "Math.Ceiling", StringComparison.InvariantCultureIgnoreCase)
+                .Replace("floor", "Math.Floor", StringComparison.InvariantCultureIgnoreCase)
+                .Replace("min", "Math.Min", StringComparison.InvariantCultureIgnoreCase)
+                .Replace("max", "Math.Max", StringComparison.InvariantCultureIgnoreCase);
         }
     }
 }

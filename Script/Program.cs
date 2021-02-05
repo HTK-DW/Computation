@@ -15,7 +15,7 @@ namespace Heliatek.Computation.Script
 
     class Program
     {
-        public static async Task Main(string[] args)
+        public static async Task Main()
         {
             var variables = new[]
             {
@@ -123,7 +123,6 @@ namespace Heliatek.Computation.Script
                 Console.WriteLine("=> " + ex.Message);
                 return null;
             }
-            Console.WriteLine();
         }
     }
 }
